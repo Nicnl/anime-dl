@@ -44,7 +44,7 @@ class CrunchyRoll(object):
         if not Crunchy_Language:
             Crunchy_Language = "/"
         else:
-            Crunchy_Language = Crunchy_Language.group(1) + "/"
+            Crunchy_Language = "/" + Crunchy_Language.group(1)
 
 
         Crunchy_Show_regex = r'https?:\/\/(?:(?P<prefix>www|m)\.)?(?P<url>crunchyroll\.com(\/[a-z]{2}|\/[a-z]{2}-[a-z]{2})?\/(?!(?:news|anime-news|library|forum|launchcalendar|lineup|store|comics|freetrial|login))(?P<id>[\w\-]+))\/?(?:\?|$)'
@@ -55,6 +55,10 @@ class CrunchyRoll(object):
 
         if Crunchy_Video:
             cookies, Token = self.webpagedownloader(url=url, username=username[0], password=password[0], country=Crunchy_Language)
+
+            if cookies is None and Token is None:
+                return
+
             if skipper == "yes":
                 self.onlySubs(url=url, cookies=cookies)
             else:
@@ -62,37 +66,49 @@ class CrunchyRoll(object):
                     url=url, cookies=cookies, token=Token, resolution=resolution)
         elif Crunchy_Show:
             cookies, Token = self.webpagedownloader(url=url, username=username[0], password=password[0], country=Crunchy_Language)
+
+            if cookies is None and Token is None:
+                return
+
             self.wholeShow(url=url, cookie=cookies, token=Token, language=language, resolution=resolution,
                            skipper=skipper, episode_range=episode_range)
         else:
             print("URL does not look like a show or a video, stopping.")
 
     def login_check(self, htmlsource):
-        # Open the page and check the title. CrunchyRoll redirects the user and the title has the text "Redirecting...".
-        # If this is not found, you're probably not logged in and you'll just get 360p or 480p.
+        # If there's a disconnect button, it means the provided credentials were valid
+        if '<a href="/logout"' in htmlsource:
+            return True
 
-        # titleCheck = re.search(r'\<title\>(.*?)\</title\>',
-        #                        str(htmlsource)).group(1)
-        # if str(titleCheck) == "Redirecting...":
-        #     return True
-        # else:
-        #     return False
-        return True
+        # If there's no disconnect button, well, there's a problem
+        # Let's try to recover the error message
+
+        login_error = re.search(r'<\s*li\s*.+class\s*=\s*".*error.*"\s*>(.+)<\s*/\s*li\s*>', htmlsource)
+
+        if login_error:
+            login_error = login_error.group(1)
+        else:
+            login_error = 'unknown error, could not find any error message'
+
+        print("Login error: %s" % login_error)
+
+        return False
 
     def webpagedownloader(self, url, username, password, country):
+        crunchy_login_url = 'https://www.crunchyroll.com' + country + '/login'
+        logging.debug("crunchy_login_url : %s" % crunchy_login_url)
 
         headers = {
             'User-Agent':
                 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36',
-            'Referer':
-                'https://www.crunchyroll.com/' + country + 'login'
+            'Referer': crunchy_login_url
         }
 
         sess = requests.session()
         sess = cfscrape.create_scraper(sess)
         print("Trying to login...")
 
-        initial_page_fetch = sess.get(url='https://www.crunchyroll.com/' + country + 'login', headers=headers)
+        initial_page_fetch = sess.get(url=crunchy_login_url, headers=headers)
 
         if initial_page_fetch.status_code == 200:
             initial_page_source = initial_page_fetch.text.encode("utf-8")
@@ -108,7 +124,7 @@ class CrunchyRoll(object):
             }
 
             login_post = sess.post(
-                url='https://www.crunchyroll.com/' + country + 'login',
+                url=crunchy_login_url,
                 data=payload,
                 headers=headers,
                 cookies=initial_cookies)
@@ -126,9 +142,11 @@ class CrunchyRoll(object):
                 return initial_cookies, csrf_token
             else:
                 print("Unable to Log you in. Check credentials again.")
+                return None, None
         else:
             print("Couldn't connect to the login page...")
             print("Website returned : %s" % str(initial_page_fetch.status_code))
+            return None, None
 
     def rtmpDump(self, host, file, url, filename):
         # print("Downloading RTMP DUMP STREAM!")
@@ -264,6 +282,7 @@ class CrunchyRoll(object):
                         try:
                             #m3u8_file_text = m3u8_file_connect.text.splitlines()[2]
                             m3u8_file_text = None
+                            available_resolutions = []
 
                             next_line_is_good = False
                             for i, currentLine in enumerate(m3u8_file_connect.text.splitlines()):
@@ -271,11 +290,21 @@ class CrunchyRoll(object):
                                     m3u8_file_text = currentLine
                                     logging.debug("file to download : %s", m3u8_file_text)
                                     break
-                                elif currentLine.startswith("#EXT-X") and resolution_to_find in currentLine:
-                                    next_line_is_good = True
+                                elif currentLine.startswith("#EXT-X"):
+                                    currentLineResolution = re.search(r'RESOLUTION=[0-9]+x([0-9]+)', currentLine)
+                                    if currentLineResolution:
+                                        currentLineResolution = currentLineResolution.group(1) + 'p'
+                                        if currentLineResolution not in available_resolutions:
+                                            available_resolutions.append(currentLineResolution)
+
+                                    if resolution_to_find in currentLine:
+                                        next_line_is_good = True
+
 
                             if m3u8_file_text is None:
-                                print('Could not find the requested resolution %s in the m3u8 file\n' % file_name)
+                                print('Could not find the requested resolution [%s] in the master.m3u8 file\n' % resolution_to_find)
+                                if len(available_resolutions) > 0:
+                                    print('Here are all the available resolutions: [%s]' % ', '.join(sorted(available_resolutions)))
                                 return
 
                             logging.debug("m3u8_file_text : %s", m3u8_file_text)
