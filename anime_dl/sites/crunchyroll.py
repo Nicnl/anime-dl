@@ -42,7 +42,7 @@ class CrunchyRoll(object):
         # Extract the language from the input URL
         Crunchy_Language = re.search(r'.+\/([a-z]{2}|[a-z]{2}-[a-z]{2})\/.+', url)
         if not Crunchy_Language:
-            Crunchy_Language = "/"
+            Crunchy_Language = ""
         else:
             Crunchy_Language = "/" + Crunchy_Language.group(1)
 
